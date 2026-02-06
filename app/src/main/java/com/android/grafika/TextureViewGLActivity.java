@@ -119,7 +119,7 @@ public class TextureViewGLActivity extends Activity {
      * happen on the UI thread.
      */
     private static class Renderer extends Thread implements TextureView.SurfaceTextureListener {
-        private Object mLock = new Object();        // guards mSurfaceTexture, mDone
+        final private Object mLock = new Object();        // guards mSurfaceTexture, mDone
         private SurfaceTexture mSurfaceTexture;
         private EglCore mEglCore;
         private boolean mDone;

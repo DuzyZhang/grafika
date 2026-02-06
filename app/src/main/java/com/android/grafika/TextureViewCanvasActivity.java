@@ -171,7 +171,7 @@ public class TextureViewCanvasActivity extends Activity {
                     // just be drawing into the area covered by it -- the system lets us draw
                     // whatever we want, then overwrites the areas outside the dirty rect with
                     // the previous contents.  So we've got a lot of overdraw here.
-                    canvas.drawRGB(1, 1, 1);
+                    canvas.drawRGB(clearColor, clearColor, clearColor);
                     canvas.drawRect(xpos, mHeight / 4, xpos + BLOCK_WIDTH, mHeight * 3 / 4, paint);
                 } finally {
                     // Publish the frame.  If we overrun the consumer, frames will be dropped,
