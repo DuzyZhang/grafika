@@ -281,18 +281,15 @@ public class RecordFBOActivity extends Activity implements SurfaceHolder.Callbac
             return;
         }
 
-        switch (rb.getId()) {
-            case R.id.recDrawTwice_radio:
-                mSelectedRecordMethod = RECMETHOD_DRAW_TWICE;
-                break;
-            case R.id.recFbo_radio:
-                mSelectedRecordMethod = RECMETHOD_FBO;
-                break;
-            case R.id.recFramebuffer_radio:
-                mSelectedRecordMethod = RECMETHOD_BLIT_FRAMEBUFFER;
-                break;
-            default:
-                throw new RuntimeException("Click from unknown id " + rb.getId());
+        int id = rb.getId();
+        if (id == R.id.recDrawTwice_radio) {
+            mSelectedRecordMethod = RECMETHOD_DRAW_TWICE;
+        } else if (id == R.id.recFbo_radio) {
+            mSelectedRecordMethod = RECMETHOD_FBO;
+        } else if (id == R.id.recFramebuffer_radio) {
+            mSelectedRecordMethod = RECMETHOD_BLIT_FRAMEBUFFER;
+        } else {
+            throw new RuntimeException("Click from unknown id " + rb.getId());
         }
 
         Log.d(TAG, "Selected rec mode " + mSelectedRecordMethod);

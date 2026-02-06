@@ -64,7 +64,7 @@ public class PlayMovieActivity extends Activity implements OnItemSelectedListene
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_play_movie);
 
-        mTextureView = (TextureView) findViewById(R.id.movie_texture_view);
+        mTextureView = findViewById(R.id.movie_texture_view);
         mTextureView.setSurfaceTextureListener(this);
 
         // Populate file-selection spinner.

@@ -76,7 +76,7 @@ public class TextureViewCanvasActivity extends Activity {
      * happen on the UI thread.
      */
     private static class Renderer extends Thread implements TextureView.SurfaceTextureListener {
-        private Object mLock = new Object();        // guards mSurfaceTexture, mDone
+        private final Object mLock = new Object();        // guards mSurfaceTexture, mDone
         private SurfaceTexture mSurfaceTexture;
         private boolean mDone;
 
@@ -171,7 +171,7 @@ public class TextureViewCanvasActivity extends Activity {
                     // just be drawing into the area covered by it -- the system lets us draw
                     // whatever we want, then overwrites the areas outside the dirty rect with
                     // the previous contents.  So we've got a lot of overdraw here.
-                    canvas.drawRGB(clearColor, clearColor, clearColor);
+                    canvas.drawRGB(1, 1, 1);
                     canvas.drawRect(xpos, mHeight / 4, xpos + BLOCK_WIDTH, mHeight * 3 / 4, paint);
                 } finally {
                     // Publish the frame.  If we overrun the consumer, frames will be dropped,
@@ -190,6 +190,7 @@ public class TextureViewCanvasActivity extends Activity {
                 // Advance state
                 clearColor += 4;
                 if (clearColor > 255) {
+                    Log.d(TAG, "doAnimation: clearColor change");
                     clearColor = 0;
                     partial = !partial;
                 }
