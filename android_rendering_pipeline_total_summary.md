@@ -121,6 +121,56 @@
 - RenderThread 是把录制结果转成 GPU 工作的桥。
 - GPU 渲染完成，只代表某个 buffer 画好了，不代表它已经上屏。
 
+### App 视角渲染流程图
+
+如果把焦点放回“一个普通硬件加速 app 的一帧是怎么走完的”，可以看下面这张图：
+
+```mermaid
+sequenceDiagram
+    participant VAPP as Vsync-App
+    participant UI as UI Thread
+    participant HWUI as HardwareRenderer
+    participant RT as RenderThread
+    participant BQ as BufferQueue
+    participant GPU as GPU
+    participant SF as SurfaceFlinger
+    participant D as Display
+
+    VAPP->>UI: doFrame / performTraversals
+    UI->>UI: measure / layout / draw
+    UI->>HWUI: updateDisplayListIfDirty
+    HWUI->>UI: 录制 RenderNode / DisplayList
+
+    UI->>RT: syncAndDrawFrame
+    RT->>RT: prepareTree / 同步 staging 属性
+    RT->>BQ: dequeueBuffer
+    BQ-->>RT: 返回可写 GraphicBuffer
+    RT->>GPU: 提交本帧 GPU 命令
+    GPU->>GPU: 光栅化 / 纹理采样 / 混合
+    GPU-->>BQ: 渲染完成并附带 fence
+    RT->>BQ: queueBuffer
+
+    SF->>BQ: 在 display-vsync 节拍上 latch 可用 buffer
+    BQ-->>SF: 返回 fence 已满足的 buffer
+    SF->>SF: 合成各 layer
+    SF->>D: present 到屏幕
+```
+
+这张图要重点看 3 个断点：
+
+- `UI Thread -> RenderThread`
+  这里是“录制命令”和“真正提交 GPU 工作”的分界线。
+- `RenderThread/GPU -> BufferQueue`
+  这里是“本帧已经画好”与“本帧只是排队等待被消费”的分界线。
+- `BufferQueue -> SurfaceFlinger -> Display`
+  这里是“可以被系统消费”与“用户真正看见”的分界线。
+
+所以以后遇到掉帧问题时，可以先问自己：
+
+- 卡在 UI 线程录制了吗
+- 卡在 RenderThread/GPU 提交了吗
+- 还是已经 queue 了，但没赶上 SurfaceFlinger 的 latch/present
+
 ---
 
 ## 第五阶段：Triple Buffer 到底缓解了什么
@@ -207,6 +257,89 @@ SurfaceFlinger 做的事：
 
 - 存在 frame dropping、队列丢弃、低延迟 latch 等机制，但不能把它简化成“只要队列里有 N 和 N+1，SF 就默认丢 N 显示 N+1”。
 - 普通 BufferQueue 路径下，更常见的理解应该是：SF 每次 latch 一个当前满足条件的 buffer，并尽量保持消费时序，而不是天然 newest-wins。
+
+---
+
+## 第七阶段：普通 View、SurfaceView、TextureView 的分叉渲染路径
+
+前面讲的是“普通硬件加速 app”的主路径，但 app 开发里还有两个高频特殊角色：`SurfaceView` 和 `TextureView`。它们的价值就在于，面对视频、相机、地图、游戏这类高频内容时，故意偏离了普通 View 的主渲染路径。
+
+### 普通 View 的路径
+
+普通 View 走的是我们前面已经建立的主链路：
+
+`UI Thread 录制 -> RenderThread 提交 GPU -> 主窗口 BufferQueue -> SurfaceFlinger 合成`
+
+也就是说，普通 View 的内容最终会进入“应用主窗口的那张 UI buffer”。
+
+### SurfaceView：独立 surface，最后再和主 UI 汇合
+
+`SurfaceView` 虽然在 View 树里占位，但它的内容通常来自一条独立的 surface/layer 链路。
+
+可以这样理解：
+
+- View 树负责它的测量、布局和几何占位
+- 内容 producer 可以是 OpenGL、Camera、MediaCodec、独立渲染线程等
+- producer 直接往它自己的 `Surface` 对应的 BufferQueue 生产 buffer
+- 这些 buffer 最终作为独立 layer 被 `SurfaceFlinger` 合成
+
+它的关键价值是：
+
+- 高频内容不一定要每一帧都重新走应用主窗口的 HWUI 绘制链
+- 更适合低延迟、大吞吐、稳定帧率场景
+
+但它不等于“完全不影响 UI”：
+
+- 它仍然会和应用其他图形工作竞争 GPU、带宽、合成资源
+- 只是它更多是“独立链路上的资源竞争”，而不是“把压力直接并入主窗口本帧”
+
+### TextureView：先变成纹理，再并入主窗口绘制
+
+`TextureView` 的核心不是独立 layer，而是 `SurfaceTexture`。
+
+可以这样理解：
+
+- producer 一样往 `Surface` 里生产 `GraphicBuffer`
+- 这些 buffer 被 `SurfaceTexture` 接收
+- 应用自己的 RenderThread 在绘制主窗口时，通过 `updateTexImage()` 把当前可用 buffer 绑定成外部纹理
+- 然后再把这张纹理采样绘制进应用主窗口的 UI buffer
+
+这意味着：
+
+- `TextureView` 的内容天然更容易和普通 View 做动画、透明、旋转、缩放
+- 但它也天然更容易把高频内容刷新压力并入 app 自己的 UI 渲染链
+
+### 为什么 TextureView 更容易拖累 UI
+
+因为它的显示更新通常要经过：
+
+- `onFrameAvailable`
+- `invalidate()`
+- `Vsync-App`
+- 主线程遍历/录制
+- 应用 RenderThread 把纹理画进主窗口
+
+所以如果主线程忙、RenderThread 忙，或者主窗口本帧 deadline 本身就紧，`TextureView` 内容就很容易和普通 UI 一起 jank。
+
+### 为什么 SurfaceView 更适合高频内容
+
+因为它更像：
+
+- 高频 producer 独立生产
+- 独立 BufferQueue 排队
+- 最后由 SurfaceFlinger 作为单独 layer 汇合
+
+所以视频、相机预览、游戏主画面、地图引擎通常更偏向 `SurfaceView`。
+
+### 一句选型结论
+
+- 普通页面 UI：优先普通 `View`
+- 高频、低延迟、重渲染内容：优先 `SurfaceView`
+- 需要和 View 树深度融合、做透明/旋转/缩放动画的媒体内容：优先 `TextureView`
+
+### 一个版本意识
+
+如果你主要阅读的是 Android 10 源码，那么用 `SurfaceControl`、独立 layer、“Punch-Hole” 等概念理解 `SurfaceView` 是完全有价值的；只是放到更现代版本里，还要继续把 `SurfaceControl.Transaction`、BLAST 和原子状态同步这条线接上。
 
 ---
 
