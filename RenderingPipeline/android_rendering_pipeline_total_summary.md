@@ -1,4 +1,4 @@
-# Android 渲染全链路总结：从 Vsync 到屏幕像素
+﻿# Android 渲染全链路总结：从 Vsync 到屏幕像素
 
 这份文档不是为了堆概念，而是为了回答 4 个真正决定你是否“学透”的问题：
 
@@ -64,6 +64,25 @@
 
 - 如果不先理解 `Surface` 是 producer 句柄，后面 `dequeueBuffer / queueBuffer / fence / latch` 都会变成空名词。
 - 应用并不是“直接画屏幕”，而是“向 BufferQueue 生产 buffer，让系统在合适时机消费”。
+
+### `relayoutWindow` 的定位
+
+站在应用侧，`ViewRootImpl.relayoutWindow()` 是这一层最值得抓的交汇点。它不是在“交一帧像素”，而是在和系统重新确认：
+
+- 当前窗口的几何状态是什么
+- 当前窗口对应哪个 `SurfaceControl/layer`
+- 后续绘制应该继续绑定哪个 `Surface`
+
+所以它更像是在重建“窗口显示契约”，而真正的一帧内容提交仍然发生在后面的 `ThreadedRenderer.draw -> nSyncAndDrawFrame -> queueBuffer` 这条内容链里。
+
+### 窗口变化通知的两个关键切面
+
+如果你是从 `relayoutWindow` 往下读源码，最容易帮助理解的不是继续追单个函数，而是同时记住下面两件事：
+
+- **同步返回 vs 异步回调**
+  同步返回解决当前 `performTraversals()` 立刻要用到的 frame、Insets、surface 变化结果；异步回调例如 `IWindow.resized()` 则用于补充后续才稳定下来的窗口状态变化。
+- **窗口状态链 vs 内容绘制链**
+  `WindowManagerService / SurfaceControl.Transaction` 更偏窗口 layer 的几何和显示状态；`ThreadedRenderer.draw -> nSyncAndDrawFrame -> queueBuffer` 更偏这一帧内容的生产与提交。真正的难点在于让两条链在 SurfaceFlinger 消费时尽量对齐，避免出现“新位置 + 旧 buffer”或“旧位置 + 新 buffer”的错配。
 
 零拷贝的本质：
 
@@ -386,3 +405,4 @@ SurfaceFlinger 做的事：
 - 指令录制器：`SkiaRecordingCanvas.cpp`
 - Buffer 与事务协议：`libs/gui/LayerState.h`
 - SurfaceFlinger 主体：`frameworks/native/services/surfaceflinger`
+
